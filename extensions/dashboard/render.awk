@@ -6,8 +6,11 @@
 # Plain POSIX awk so busybox on the Kindle runs it. Never write `name (...)` to join a
 # variable and a bracketed expression: busybox reads it as a call to a function "name".
 # Vars: place, stale (1 = last fetch failed), utc (HHMM UTC of the last good fetch), clock (HHMM UTC now),
-#       tab ("today" or "10d"), batt (battery %, empty to hide), card (bottom card: 0 date, 1 prayer).
-# Input: weather.csv, then optionally prayer.txt (see loop.sh's fetch_prayer).
+#       tab ("today" or "10d"), batt (battery %, empty to hide), paul (YYYY-MM-DD the day counter counts from),
+#       awake (1 = show the "Awake" badge in place of the update time).
+# Input: weather.csv (°F, mph, inches), then optionally extra.txt (see loop.sh's build_extra):
+#        key,value lines for the bottom card: snow_new, snow_depth, snow_temp, wave, period,
+#        dir, tide,YYYY-MM-DD HH:MM,H|L (several), holiday,Name.
 
 function cond(c) {
     c = int(c)
@@ -59,16 +62,38 @@ function rtext(px, edge, top, flags, s,   w, i, p) {
     text("R", px, int(edge - w * px), 4, top, flags, s)
 }
 function hm(t) { return substr(t, 12, 5) }  # "2026-11-07T06:58" -> "06:58"
+# 12-hour clock from minutes after midnight: "6:58 am"; short = 1 gives "7am" (hourly labels).
+function t12(mins, short,   h, m, ap) {
+    h = int(mins / 60) % 24; m = mins % 60; ap = h < 12 ? "am" : "pm"
+    h = h % 12; if (h == 0) h = 12
+    if (short) return h ap
+    return h ":" sprintf("%02d", m) " " ap
+}
+function hmm(t) { return substr(t, 12, 2) * 60 + substr(t, 15, 2) }  # "…T06:58" -> 418
+function jdn(y, m, d,   a) {  # day number, for counting days between dates
+    a = int((14 - m) / 12); y = y + 4800 - a; m = m + 12 * a - 3
+    return d + int((153 * m + 2) / 5) + 365 * y + int(y / 4) - int(y / 100) + int(y / 400) - 32045
+}
+# The bottom card's 3 x 2 tiles: column c (0-2), row r (0-1).
+function tile_x(c) { return 20 + 187 * c }
+function tile_y(r) { return 506 + 147 * r }
+function tlabel(c, r, s) { text("R", 18, tile_x(c), 600 - tile_x(c) - 187, tile_y(r) + 16, "cg", s) }
+function tline(c, r, style, px, dy, flags, s) { text(style, px, tile_x(c), 600 - tile_x(c) - 187, tile_y(r) + dy, flags, s) }
 
 BEGIN {
-    FS = ","; sec = 0; nh = 0; nd = 0; offset = 0
+    FS = ","; sec = 0; nh = 0; nd = 0; offset = 0; ntide = 0
     ADVCHARS = " 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
     split(".278 .556 .556 .556 .556 .556 .556 .556 .556 .556 .556 " \
           ".556 .556 .5 .556 .556 .278 .556 .556 .222 .222 .5 .222 .833 .556 .556 .556 .556 .333 .5 .278 .556 .5 .722 .5 .5 .5 " \
           ".667 .667 .722 .722 .667 .611 .778 .722 .278 .5 .667 .556 .833 .722 .778 .667 .778 .722 .667 .611 .722 .667 .944 .667 .667 .611", adv, " ")
 }  # counters must start numeric: an unset one indexes as ""
 { sub(/\r$/, "") }
-NR != FNR { pr[$1] = $2; next }  # second file, prayer.txt: day,YYYY-MM-DD / Fajr,HH:MM ...
+NR != FNR {  # second file, extra.txt
+    if ($1 == "tide") { tt[ntide] = $2; tk[ntide] = $3; ntide++ }
+    else if ($1 == "holiday") { s = $0; sub(/^holiday,/, "", s); ex["holiday"] = s }
+    else ex[$1] = $2
+    next
+}
 /^$/ { sec++; next }
 $1 == "time" || $1 == "latitude" { next }
 sec == 0 { offset = $4 }
@@ -95,12 +120,13 @@ END {
     # between y=52 and y=110 to them: left half Today, right half 10 days).
     if (utc != "") {
         mins = (int(utc / 100) * 60 + utc % 100 + int(offset / 60) + 1440) % 1440
-        stamp = sprintf("%02d:%02d", int(mins / 60), mins % 60)
-    } else stamp = substr(now, 12, 5)
-    ck = clock != "" ? clock : utc  # the prayer card needs the time now, not the time of the fetch
+        stamp = t12(mins)
+    } else stamp = t12(hmm(now))
+    ck = clock != "" ? clock : utc  # the tide tile needs the time now, not the time of the fetch
     if (ck != "") nowm = (int(ck / 100) * 60 + ck % 100 + int(offset / 60) + 1440) % 1440
     else nowm = substr(now, 12, 2) * 60 + substr(now, 15, 2)
-    if (stale) text("B", 18, 330, 120, 19, "", "Offline · " stamp)
+    if (awake) { box(292, 12, 192, 30, "B"); text("B", 16, 292, 116, 18, "ci", "Awake · hold to exit") }
+    else if (stale) text("B", 18, 330, 120, 19, "", "Offline · " stamp)
     else text("R", 18, 330, 120, 19, "g", "Updated " stamp)
     if (batt != "") {  # battery outline with a level bar, then the percentage (bold when low)
         frame(490, 21, 30, 15, 2); box(520, 25, 3, 7, "B")
@@ -134,8 +160,8 @@ END {
             img(icon(dcode[i], 1) "-48", 124, r + 10)
             dots = int((drain[i] + 10) / 20); if (dots > 5) dots = 5
             img("dots-" dots, 184, r + 27)
-            if (dsum[i] == "" || dsum[i] < 0.05) rain = dots ? "0 mm" : "dry"  # "dry" beside filled dots reads as a contradiction
-            else rain = (dsum[i] < 0.5 ? "<1" : sprintf("%.0f", dsum[i])) " mm"
+            if (dsum[i] == "" || dsum[i] < 0.005) rain = dots ? "0 in" : "dry"  # "dry" beside filled dots reads as a contradiction
+            else rain = (dsum[i] < 0.05 ? "<0.1" : sprintf("%.1f", dsum[i])) " in"
             text("R", 18, 304, 228, r + 24, "g", rain)
             text("R", 26, 364, 172, r + 21, "c", deg(dmin[i]))
             text("R", 26, 520, 20, r + 21, "c", deg(dmax[i]))
@@ -174,7 +200,7 @@ END {
         text("R", 18, 360, 20, 112, "g", "Today")
         text("B", 32, 360, 20, 132, "", deg(dmax[ti]) " / " deg(dmin[ti]))
         text("R", 22, 360, 20, 174, "", cond(dcode[ti]))
-        w = wind == "" ? "" : " · " sprintf("%.0f", wind) " km/h"
+        w = wind == "" ? "" : " · " sprintf("%.0f", wind) " mph"
         text("R", 18, 360, 20, 204, "g", pct(drain[ti]) " rain" w)
         if (ti + 1 < nd) {
             box(360, 238, 220, 1, "GRAYA")
@@ -191,42 +217,60 @@ END {
     for (i = nh - 1; i >= 0; i--) if (ht[i] > now) start = i
     for (s = 0; s < 7 && start + 3 * s < nh; s++) {
         i = start + 3 * s; x = 20 + 80 * s; r = 600 - x - 80
-        text("R", 18, x, r, 354, "cg", hm(ht[i]))
+        text("R", 18, x, r, 354, "cg", t12(hmm(ht[i]), 1))
         img(icon(hcode[i], hday[i]) "-48", x + 16, 378)
         text("B", 24, x, r, 430, "c", deg(htemp[i]))
         text("R", 18, x, r, 466, "cg", pct(hrain[i]))
     }
 
-    # Bottom card, switched by tapping it: 0 = date, 1 = prayer times. Dots show which.
+    # Bottom card: six tiles in a 3 x 2 grid, separated by grey rules.
     box(20, 506, 560, 1, "B")
-    if (card == 1) prayer_card(today, nowm)
-    else {
-        text("B", 180, 22, 340, 532, "c", d)
-        text("R", 28, 270, 22, 560, "", dayname[weekday(y, m, d) + 1])
-        text("B", 50, 270, 22, 598, "", monname[m])  # "September" is the widest; it must stay on one line
-        text("R", 26, 272, 22, 664, "g", y)
-        if (ti >= 0 && drise[ti] != "") text("R", 18, 272, 22, 710, "g", "Sunrise " hm(drise[ti]) " · Sunset " hm(dset[ti]))
-    }
-    for (j = 0; j < 2; j++) if (j == card + 0) box(286 + 20 * j, 768, 8, 8, "B"); else frame(286 + 20 * j, 768, 8, 8, 2)
-}
+    box(20, tile_y(1), 560, 1, "GRAYA")
+    for (c = 1; c < 3; c++) for (r = 0; r < 2; r++) box(tile_x(c), tile_y(r) + 14, 1, 119, "GRAYA")
 
-# Today's prayers in a 3 x 2 grid: the next one inverted, the ones already past in grey.
-# Title on the left, the times' date on the right.
-function prayer_card(today, now_m,   names, py, pm, pd, k, c, r, x, y, nexti, f, g, live) {
-    text("B", 24, 20, 300, 524, "", "Prayer times")
-    if (pr["Fajr"] == "") { text("R", 22, 20, 20, 630, "cg", "Not loaded yet, needs Wi-Fi"); return }
-    live = pr["day"] == today
-    py = substr(pr["day"], 1, 4) + 0; pm = substr(pr["day"], 6, 2) + 0; pd = substr(pr["day"], 9, 2) + 0
-    rtext(18, 580, 528, "g", dayname[weekday(py, pm, pd) + 1] " " pd " " monname[pm] " " py)
-    split("Fajr Sunrise Dhuhr Asr Maghrib Isha", names, " ")
-    nexti = 7  # first prayer still ahead today (Sunrise isn't a prayer); 7 = all past
-    for (k = 6; k >= 1; k--) if (k != 2 && pr[names[k]] != "" && substr(pr[names[k]], 1, 2) * 60 + substr(pr[names[k]], 4, 2) > now_m) nexti = k
-    for (k = 1; k <= 6; k++) {
-        c = (k - 1) % 3; r = int((k - 1) / 3)
-        x = 22 + 185 * c; y = 570 + 94 * r; f = "c"; g = "cg"
-        if (live && k == nexti) { box(x + 8, y, 169, 86, "B"); f = g = "ci" }
-        else if (live && k < nexti) f = "cg"
-        text("R", 22, x, 600 - x - 185, y + 8, g, names[k])
-        text("B", 40, x, 600 - x - 185, y + 32, f, pr[names[k]] == "" ? "-" : pr[names[k]])
+    # Days since Paul left: day 0 is the day itself.
+    tlabel(0, 0, "Days since Paul left")
+    if (paul ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) {
+        n = jdn(y, m, d) - jdn(substr(paul, 1, 4) + 0, substr(paul, 6, 2) + 0, substr(paul, 9, 2) + 0)
+        tline(0, 0, "B", n > 9999 || n < -999 ? 44 : 64, 46, "c", n)
+    } else tline(0, 0, "R", 20, 64, "cg", "Set PAUL_DATE")
+
+    # Today is: the day's fun holiday from holidays.txt. Long names drop a size and wrap.
+    tlabel(1, 0, "Today is")
+    h = ex["holiday"]
+    if (h == "") tline(1, 0, "R", 20, 56, "cg", "Just a regular " dayname[weekday(y, m, d) + 1])
+    else tline(1, 0, "B", length(h) > 30 ? 20 : 24, 50, "c", h)
+
+    # Sunrise and sunset, today's.
+    tlabel(2, 0, "Sunrise")
+    tline(2, 0, "B", 38, 54, "c", ti >= 0 && drise[ti] != "" ? t12(hmm(drise[ti])) : "-")
+    tlabel(2, 1, "Sunset")
+    tline(2, 1, "B", 38, 54, "c", ti >= 0 && dset[ti] != "" ? t12(hmm(dset[ti])) : "-")
+
+    # Kirkwood: new snow in the last 24 h, then base depth and temperature (Open-Meteo model).
+    tlabel(0, 1, "Kirkwood")
+    if (ex["snow_new"] == "" && ex["snow_depth"] == "") tline(0, 1, "R", 20, 64, "cg", "No data yet")
+    else {
+        tline(0, 1, "B", 32, 46, "c", (ex["snow_new"] == "" ? "-" : ex["snow_new"]) "\" new")
+        s = (ex["snow_depth"] == "" ? "-" : ex["snow_depth"]) "\" base"
+        if (ex["snow_temp"] != "") s = s " · " ex["snow_temp"] "°"
+        tline(0, 1, "R", 20, 92, "cg", s)
     }
+
+    # Linda Mar: wave height, swell period and direction, and the next tide.
+    tlabel(1, 1, "Linda Mar")
+    if (ex["wave"] == "") tline(1, 1, "R", 20, 64, "cg", "No data yet")
+    else {
+        tline(1, 1, "B", 32, 46, "c", ex["wave"] " ft")
+        s = ex["period"] == "" ? "" : ex["period"] "s"
+        if (ex["dir"] != "") s = (s == "" ? "" : s " ") ex["dir"]
+        if (s != "") tline(1, 1, "R", 20, 88, "cg", s)
+    }
+    # Next tide after now (tide times are local "YYYY-MM-DD HH:MM").
+    nt = -1
+    for (k = ntide - 1; k >= 0; k--) {
+        td = substr(tt[k], 1, 10); tm = substr(tt[k], 12, 2) * 60 + substr(tt[k], 15, 2)
+        if (td > today || (td == today && tm > nowm)) nt = k
+    }
+    if (nt >= 0) tline(1, 1, "R", 20, 114, "cg", (tk[nt] == "H" ? "High " : "Low ") t12(substr(tt[nt], 12, 2) * 60 + substr(tt[nt], 15, 2)))
 }

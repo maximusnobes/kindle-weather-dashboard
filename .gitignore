@@ -20,3 +20,13 @@ extensions/dashboard/prayer.json
 extensions/dashboard/prayer.new
 screen.new
 screen.key
+# Written by the adapted dashboard at runtime
+extensions/dashboard/snow.*
+extensions/dashboard/surf.*
+extensions/dashboard/tide.*
+extensions/dashboard/*.new
+extensions/dashboard/extra.txt
+extensions/dashboard/dashboard.log
+extensions/dashboard/screen.*
+dashboard-probe.txt
+dashboard-touch-*.bin

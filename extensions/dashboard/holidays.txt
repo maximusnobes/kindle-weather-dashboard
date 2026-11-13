@@ -1,0 +1,8 @@
+# Fun holidays for the "Today is" tile: one line per day, as MM-DD,Name
+# The first line matching today's date is shown; days with no line show "Just a regular <weekday>".
+# Lines starting with # are ignored. Long names wrap onto two lines.
+# These lines are examples: replace them with your own list.
+01-01,New Year's Day
+03-14,Pi Day
+11-11,Veterans Day
+12-25,Christmas Day

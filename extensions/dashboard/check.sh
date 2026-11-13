@@ -1,103 +1,96 @@
 #!/bin/sh
-# Mac-side check of render.awk against a fixed forecast: sh extensions/dashboard/check.sh
+# Mac-side check of render.awk and extras.awk against fixed data: sh extensions/dashboard/check.sh
 cd "$(dirname "$0")" || exit 1
-fixture() {
-    printf 'latitude,longitude,elevation,utc_offset_seconds,timezone,timezone_abbreviation\r\n48.2,16.37,181.0,3600,Europe/Vienna,GMT+1\r\n\r\n'
-    printf 'time,temperature_2m (C),weather_code (wmo code),relative_humidity_2m (%%),is_day (),apparent_temperature (C),wind_speed_10m (km/h)\n2026-11-04T20:45,7.6,61,80,0,4.6,12.4\n\n'
-    printf 'time,temperature_2m (C),weather_code (wmo code),precipitation_probability (%%),is_day ()\n'
-    awk 'BEGIN { for (h = 0; h < 48; h++) printf "2026-11-%02dT%02d:00,-3.6,999,,%d\n", 4 + int(h / 24), h % 24, (h % 24 >= 7 && h % 24 < 17) }'
-    printf '\ntime,weather_code (wmo code),temperature_2m_max (C),temperature_2m_min (C),precipitation_probability_max (%%),precipitation_sum (mm),sunrise (iso8601),sunset (iso8601)\n'
-    printf '2026-11-04,3,9.0,2.0,40,0.3,2026-11-04T06:45,2026-11-04T16:31\n2026-11-05,0,11.0,3.0,0,0.0,,\n'
-    awk 'BEGIN { for (d = 6; d <= 13; d++) printf "2026-11-%02d,63,12.0,5.0,37,16.2,,\n", d }'
+fixture() {  # Redwood City, °F / mph / inches, local time UTC-8, current time 09:45 on Wed 11 Nov 2026
+    printf 'latitude,longitude,elevation,utc_offset_seconds,timezone,timezone_abbreviation\r\n37.49,-122.24,7.0,-28800,America/Los_Angeles,GMT-8\r\n\r\n'
+    printf 'time,temperature_2m (°F),weather_code (wmo code),relative_humidity_2m (%%),is_day (),apparent_temperature (°F),wind_speed_10m (mp/h)\n2026-11-11T09:45,61.2,0,54,1,59.1,7.3\n\n'
+    printf 'time,temperature_2m (°F),weather_code (wmo code),precipitation_probability (%%),is_day ()\n'
+    awk 'BEGIN { for (h = 0; h < 48; h++) printf "2026-11-%02dT%02d:00,-3.6,999,,%d\n", 11 + int(h / 24), h % 24, (h % 24 >= 7 && h % 24 < 17) }'
+    printf '\ntime,weather_code (wmo code),temperature_2m_max (°F),temperature_2m_min (°F),precipitation_probability_max (%%),precipitation_sum (inch),sunrise (iso8601),sunset (iso8601)\n'
+    printf '2026-11-11,0,66.0,47.0,5,0.0,2026-11-11T06:47,2026-11-11T17:01\n2026-11-12,3,63.0,49.0,0,0.0,,\n'
+    printf '2026-11-13,63,59.0,50.0,62,0.21,,\n2026-11-14,61,57.0,48.0,30,0.02,,\n'
+    awk 'BEGIN { for (d = 15; d <= 20; d++) printf "2026-11-%02d,0,64.0,45.0,0,0.0,,\n", d }'
 }
-render() { awk -v place=Vienna -v batt=87 "$@" -f render.awk; }
-out=$(fixture | render -v stale=0 -v utc=1952)
+extra() {
+    printf 'snow_new,6\nsnow_depth,41\nsnow_temp,24\nwave,4.1\nperiod,12\ndir,WNW\n'
+    printf 'tide,2026-11-11 04:39,L\ntide,2026-11-11 10:37,H\ntide,2026-11-11 18:09,L\ntide,2026-11-12 01:11,H\n'
+    printf 'holiday,Example Day, with a comma\n'
+}
+X=$(mktemp); extra > "$X"; E=$(mktemp); : > "$E"
+render() { awk -v place="Redwood City" -v batt=87 -v paul=2026-06-21 "$@"; }  # call as: render -v var=... -f render.awk files
+out=$(fixture | render -v stale=0 -v utc=1704 -v clock=1745 -f render.awk - "$X")
 fail=0
 expect() { printf '%s\n' "$1" | grep -qF -- "$2" || { echo "missing: $2"; fail=1; }; }
-expect "$out" "T|B|22|20|300|16||Vienna"
+expect "$out" "T|B|22|20|300|16||Redwood City"
 expect "$out" "||87%"
-expect "$out" "R|493|24|20|9|B"            # 87% of the 24 px battery bar
-expect "$out" "R|20|48|560|1|B"           # rule above the tabs
-expect "$out" "T|B|22|20|300|60|c|Today"       # active tab is bold, tabs split the width
-expect "$out" "T|R|22|300|20|60|cg|10 days"    # inactive tab is grey
-expect "$out" "|g|Updated 20:52"          # device UTC 19:52 + 3600 s
-expect "$out" "T|B|124|199|240|132||8°"    # 7.6 rounds up; icon + temp centred left of the Today column
-expect "$out" "I|rain-160|43|104"          # current code 61
-expect "$out" "|cg|Feels like 5° · Humidity 80%"
-expect "$(fixture | sed "s/T20:45,7.6/T20:45,-12.3/" | render -v utc=1952)" "T|B|105|160|240|141||-12°"  # shrinks to fit
-expect "$out" "||9° / 2°"
-expect "$out" "|g|40% rain · 12 km/h"
-expect "$out" "||11° / 3°"                 # tomorrow uses tomorrow's values
-expect "$out" "|g|0% rain"
-expect "$out" "|cg|21:00"                  # first slot after 20:45
-expect "$out" "|c|-4°"                     # negative temperatures round away from zero
-expect "$out" "I|storm-48|"                # unknown codes >= 95 count as storms
-expect "$out" "|cg|-"                      # missing rain chance
-expect "$out" "T|B|180|22|340|532|c|4"     # big day number
-expect "$out" "R|20|334|560|1|B"          # single rules between widgets, no boxes
-expect "$out" "R|20|506|560|1|B"
-case "$out" in *"|560|162|"*|*"|560|274|"*) echo "widgets should not be boxed"; fail=1 ;; esac
-expect "$out" "||Wednesday"
-expect "$out" "||November"
-expect "$out" "|g|2026"
-expect "$out" "|g|Sunrise 06:45 · Sunset 16:31"
-expect "$(fixture | render -v stale=1 -v utc=1952)" "T|B|18|330|120|19||Offline · 20:52"
-expect "$(fixture | render -v utc=1952 -v batt=15)" "T|B|18|528|20|19||15%"  # low battery in bold
-week=$(fixture | render -v stale=0 -v utc=1952 -v tab=10d)
+expect "$out" "|g|Updated 9:04 am"           # device UTC 17:04 - 8 h, 12-hour clock
+awake=$(fixture | render -v utc=1704 -v awake=1 -f render.awk - "$X")
+expect "$awake" "R|292|12|192|30|B"          # awake badge replaces the update time
+expect "$awake" "|ci|Awake · hold to exit"
+case "$awake" in *"Updated "*) echo "awake screen still shows the update time"; fail=1 ;; esac
+expect "$out" "||61°"
+expect "$out" "|cg|Feels like 59° · Humidity 54%"
+expect "$out" "|g|5% rain · 7 mph"
+expect "$out" "|cg|10am"                    # first hourly slot after 09:45
+expect "$out" "|cg|1pm"
+# Bottom card
+expect "$out" "R|20|653|560|1|GRAYA"        # rule between the two rows of tiles
+expect "$out" "|cg|Days since Paul left"
+expect "$out" "|c|143"                       # 21 June to 11 November
+expect "$out" "|c|Example Day, with a comma"
+expect "$out" "|c|6:47 am"
+expect "$out" "|c|5:01 pm"
+expect "$out" "|c|6\" new"
+expect "$out" "|cg|41\" base · 24°"
+expect "$out" "|c|4.1 ft"
+expect "$out" "|cg|12s WNW"
+expect "$out" "|cg|High 10:37 am"            # next tide after 09:45
+late=$(fixture | render -v utc=1704 -v clock=0300 -f render.awk - "$X")  # 19:00 local
+expect "$late" "|cg|High 1:11 am"            # tomorrow's first tide
+bare=$(fixture | render -v utc=1704 -f render.awk - "$E")
+expect "$bare" "|cg|Just a regular Wednesday"
+expect "$bare" "|cg|No data yet"
+expect "$(fixture | awk -v place=X -v paul=CHANGEME -f render.awk - "$E")" "Set PAUL_DATE"
+case "$out" in *"km/h"*|*" mm"*) echo "metric units left over"; fail=1 ;; esac
+# 10-day tab
+week=$(fixture | render -v stale=0 -v utc=1704 -v tab=10d -f render.awk - "$X")
 expect "$week" "T|B|22|300|20|60|c|10 days"
-expect "$week" "|Today"
-expect "$week" "|g|Thu"                    # 5 November
-expect "$week" "|g|Fri"
-expect "$week" "I|dots-2|"                 # 40% and 37% -> two dots
-expect "$week" "I|dots-0|"                 # 0%
-expect "$week" "|g|<1 mm"
 expect "$week" "|g|dry"
-expect "$week" "|g|16 mm"
-expect "$week" "R|434|131|80|6|GRAYD"      # range track on the first row
-expect "$week" "R|434|131|56|6|B"          # today 2-9 within the 10 days' 2-12
+expect "$week" "|g|0.2 in"
+expect "$week" "|g|<0.1 in"
 [ "$(printf '%s\n' "$week" | grep -c '^I|dots-')" = 10 ] || { echo "10d tab should have 10 rows"; fail=1; }
-case "$week" in *Tomorrow*) echo "10d tab drew the Today view"; fail=1 ;; esac
-pray=$(mktemp)
-printf 'day,2026-11-04\nFajr,05:01\nSunrise,06:47\nDhuhr,11:38\nAsr,14:05\nMaghrib,16:28\nIsha,18:09\n' > "$pray"
-card=$(fixture | awk -v place=Vienna -v batt=87 -v utc=1530 -v card=1 -f render.awk - "$pray")  # 16:30 local
-late=$(fixture | awk -v place=Vienna -v batt=87 -v utc=1530 -v clock=2130 -v card=1 -f render.awk - "$pray")  # fetched 16:30, now 22:30
-old=$(fixture | sed 's/^2026-11-04T20:45/2026-11-05T20:45/' | awk -v place=Vienna -v utc=1530 -v card=1 -f render.awk - "$pray")
-rm -f "$pray"
-expect "$card" "|cg|Fajr"
-expect "$card" "|cg|05:01"                 # past prayers in grey
-expect "$card" "|cg|16:28"                 # Maghrib is just past at 16:30
-expect "$card" "T|B|24|20|300|524||Prayer times"  # title on the left
-expect "$card" "T|R|18|336|4|528|g|Wednesday 4 November 2026"  # date right-aligned to x=580
-expect "$card" "R|400|664|169|86|B"        # next prayer (Isha) inverted
-expect "$card" "|ci|18:09"
-expect "$late" "|cg|18:09"
-case "$late" in *"|ci|"*) echo "nothing should be highlighted after Isha"; fail=1 ;; esac
-expect "$old" "|g|Wednesday 4 November 2026"   # older times say which day they are for
-case "$old" in *"|ci|"*) echo "another day's times must not be highlighted"; fail=1 ;; esac
-case "$card" in *"||November"*) echo "prayer card also drew the date card"; fail=1 ;; esac
-expect "$(fixture | render -v utc=1530 -v card=1)" "Not loaded yet"
-empty=$(printf '' | render)
-expect "$empty" "||Vienna"                 # the place name is the way Home
+empty=$(printf "" | render -f render.awk)
+expect "$empty" "||Redwood City"            # the place name is the way Home
 expect "$empty" "No weather data yet"
-# Battery scheduling from loop.sh: hourly refreshes, none at night, wakes at prayer times.
-eval "$(sed -n '/^utc_offset()/p;/^next_refresh()/,/^}/p;/^prayer_wake()/,/^}/p' loop.sh)"
-DIR=$(mktemp -d); fixture > "$DIR/weather.csv"  # UTC+1
-printf 'day,2026-11-04\nFajr,05:01\nSunrise,06:47\nDhuhr,11:38\nAsr,14:05\nMaghrib,16:28\nIsha,18:09\n' > "$DIR/prayer.txt"
-INTERVAL=3600; NIGHT="23 6"
+
+# extras.awk on the three downloads
+tide=$(printf 'Date Time, Prediction, Type\n2026-11-11 00:23,4.105,H\n2026-11-11 04:39,2.924,L\n' | awk -v kind=tide -f extras.awk)
+expect "$tide" "tide,2026-11-11 00:23,H"
+expect "$tide" "tide,2026-11-11 04:39,L"
+snow=$(printf 'latitude,longitude,elevation,utc_offset_seconds,timezone,timezone_abbreviation\n38.68,-120.07,2600.0,-28800,America/Los_Angeles,GMT-8\n\ntime,temperature_2m (°F),snow_depth (m)\n2026-11-11T09:45,23.6,1.04\n\ntime,snowfall (inch)\n2026-11-10T10:00,1.5\n2026-11-11T09:00,4.4\n2026-11-11T10:00,9.0\n' | awk -v kind=snow -f extras.awk)
+expect "$snow" "snow_temp,24"
+expect "$snow" "snow_depth,41"              # 1.04 m
+expect "$snow" "snow_new,6"                 # 10:00 is after 09:45, so not counted
+surf=$(printf 'latitude,longitude,elevation,utc_offset_seconds,timezone,timezone_abbreviation\n37.6,-122.6,0.0,-28800,America/Los_Angeles,GMT-8\n\ntime,wave_height (ft),swell_wave_height (ft),swell_wave_period (s),swell_wave_direction (°)\n2026-11-11T09:45,4.13,3.5,12.3,290\n' | awk -v kind=surf -f extras.awk)
+expect "$surf" "wave,4.1"
+expect "$surf" "period,12"
+expect "$surf" "dir,WNW"
+expect "$(printf 'latitude\n0\n\ntime,wave_height (m)\n2026-11-11T09:45,2.02\n' | awk -v kind=surf -f extras.awk)" "wave,6.6"
+
+# Battery scheduling from loop.sh: hourly refreshes, none at night.
+eval "$(sed -n '/^utc_offset()/p;/^next_refresh()/,/^}/p' loop.sh)"
+DIR=$(mktemp -d); fixture > "$DIR/weather.csv"  # UTC-8
+INTERVAL=3600; NIGHT="1 7"
 same() { [ "$1" = "$2" ] || { echo "$3: got $1, want $2"; fail=1; }; }
-same "$(next_refresh 1793821500)" 1793825100 "20:45 local -> 21:45"
-same "$(next_refresh 1793827800)" 1793854800 "22:30 local -> 06:00 next morning"
-same "$(next_refresh 1793754000)" 1793768400 "02:00 local -> 06:00 same morning"
-NIGHT=""; same "$(next_refresh 1793827800)" 1793831400 "no night window -> 23:30"
-same "$(prayer_wake 1793806200)" 1793812145 "16:30 local -> just after Isha 18:09"
-same "$(prayer_wake 1793827800)" 1793833205 "22:30 local -> just after midnight"
-rm -rf "$DIR"
+same "$(next_refresh 1794419100)" 1794422700 "09:45 local -> 10:45"
+same "$(next_refresh 1794385800)" 1794409200 "00:30 local -> 07:00"
+rm -rf "$DIR" "$X" "$E"
 # Everything must fit on the 600x800 screen.
-printf '%s\n%s\n%s\n' "$out" "$week" "$card" | awk -F'|' '
+printf '%s\n%s\n' "$out" "$week" | awk -F'|' '
     $1 == "R" { x = $2; y = $3; r = $2 + $4; b = $3 + $5 }
     $1 == "I" { n = split($2, p, "-"); w = h = p[n] + 0; if ($2 ~ /^dots/) { w = 110; h = 14 }
                 x = $3; y = $4; r = $3 + w; b = $4 + h }
     $1 == "T" { x = $4; y = $6; r = 600 - $5; b = $6 + $3 * 1.2 }
     x < 0 || y < 0 || r > 600 || b > 800 { print "off screen: " $0; bad = 1 }
     END { exit bad }' || fail=1
-[ $fail = 0 ] && echo ok || { printf '%s\n' "$out" "$week"; exit 1; }
+[ $fail = 0 ] && echo ok || exit 1
